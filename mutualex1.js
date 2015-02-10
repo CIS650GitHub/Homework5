@@ -16,7 +16,7 @@ var master_ip = "";
 var states = {
     GAP: 0,
     WAIT: 1,
-    REQUEST: 2
+    CRITICAL: 2
 };
 var currentState = 0;
 var requestQueue = [];
@@ -33,7 +33,7 @@ var messageType = {
 };
 var currState = states.GAP;
 
-function message(msgType, tStamp, ipAddr,port) {
+function message(msgType, tStamp, ipAddr, port) {
     this.port = port;
     this.messageType = msgType;
     this.timeStamp = tStamp;
@@ -165,10 +165,7 @@ screen.render();
 buttonRequest.on('press', function() {
 
     //increment our time stamp
-    my_time++;
-    if (my_time > highest_time) {
-        highest_time = my_time;
-    }
+    my_time = highest_time + 1;
     var success1 = d.send(master_ip, {
             Port: port,
             MessageType: messageType.request,
@@ -196,21 +193,21 @@ buttonRelease.on('press', function() {
         var tTime = parseInt(msg.TimeStamp);
         var address = msg.port;
         console.log("address" + address);
-        
+
         var post_data = querystring.stringify({
                 Port: port,
                 IPaddress: my_ip,
                 MessageType: messageType.response,
                 TimeStamp: my_time,
-                
+
             });
         PostObject(post_data, address);
     }
-    currentState =  states.GAP;
-     replyQueue = [];
-     requestQueue = [];
-    
-    
+    currentState = states.GAP;
+    replyQueue = [];
+    requestQueue = [];
+
+
 
 });
 
@@ -233,19 +230,17 @@ function receivePostdata(data) {
     var tTime = parseInt(data.TimeStamp);
     var address = data.port;
     console.log("receivePostdata" + address + "message type" + tMessage);
-    if (tMessage == messageType.response) {
-
-        if (replyQueue.length == (numNodes - 1)) {
-            currentState = states.REQUEST;
-            replyQueue = [];
-            currReply = 0;
-            console.log("enter critical section");
-        } else {
-            console.log("queuing.... queue size is before adding " + replyQueue.length);
-            replyQueue[currReply] = new message(messageType.response, tTime, data.IPaddress, data.Port);
-            currReply++;
-        }
+    if (replyQueue.length == (numNodes - 1)) {
+        currentState = states.CRITICAL;
+        replyQueue = [];
+        currReply = 0;
+        console.log("enter critical section");
+    } else {
+        console.log("queuing.... queue size is before adding " + replyQueue.length);
+        replyQueue[currReply] = new message(messageType.response, tTime, data.IPaddress, data.Port);
+        currReply++;
     }
+
 }
 
 
@@ -254,79 +249,71 @@ function receiveMessage(data) {
     var tMessage = parseInt(data.MessageType);
     var tTime = parseInt(data.TimeStamp);
     var address = data.Port;
-    if (tMessage == messageType.request) {
+    highest_time = tTime;
+    console.log("Highest time updated" + highest_time);
 
-        switch (currentState) {
 
-            case states.GAP:
-                console.log("in  Gap State");
-                if (tMessage == messageType.request) {
-                    if (highest_time < tTime) {
-                        highest_time = tTime;
-                        console.log("Highest time updated");
-                    }
+    switch (currentState) {
+
+        case states.GAP:
+            {
+                console.log("in  Gap State Sending Reply to " + address);
+
+                var post_data = querystring.stringify({
+                        Port: port,
+                        IPaddress: my_ip,
+                        MessageType: messageType.response,
+                        TimeStamp: my_time
+                    });
+                PostObject(post_data, address);
+            }
+            break;
+
+
+        case states.WAIT:
+            {
+                console.log("in  Wait State");
+
+                if (tTime < my_time) {
                     //send reply 
+                    console.log("tTime < my_time");
                     var post_data = querystring.stringify({
                             Port: port,
-                            IPaddress:my_ip,
+                            IPaddress: my_ip,
                             MessageType: messageType.response,
                             TimeStamp: my_time
                         });
                     PostObject(post_data, address);
+                } else if (tTime > my_time) {
+                    console.log("tTime > my_time so defer reply!!");
+                    requestQueue[currRequest] = new message(messageType.request, tTime, data.IPaddress, data.Port);
+                    currRequest++;
+                } else if (tTime == my_time) {
+                    console.log("tTime == my_time");
                 }
-                break;
+            }
+            break;
 
-
-            case states.WAIT:
-                console.log("in  Wait State");
-                if (tMessage == messageType.request) {
-                    if (tTime < my_time) {
-                        //send reply 
-                        console.log("tTime < my_time");
-                        var post_data = querystring.stringify({
-                                Port: port,
-                                IPaddress:my_ip,
-                                MessageType: messageType.response,
-                                TimeStamp: my_time
-                            });
-                        PostObject(post_data, address);
-                    } else if (tTime > my_time) {
-                        console.log("tTime > my_time");
-                        requestQueue[currRequest] = new message(messageType.request, tTime, data.IPaddress, data.Port);
-                        currRequest++;
-                    } else if (tTime == my_time) {
-                        console.log("tTime == my_time");
-                        requestQueue[currRequest] = new message(messageType.request, tTime, data.IPaddress, data.Port);
-                        currRequest++;
-                    }
-                }
-                break;
-
-            case states.REQUEST:
-                console.log("in REQUEST state");
+        case states.CRITICAL:
+            {
+                console.log("in CRITICAL state");
 
                 if (tMessage == messageType.request) {
                     if (highest_time < tTime) {
                         highest_time = tTime;
                     }
-                    requestQueue[currRequest] = new message(messageType.request, tTime, address,data.Port);
+                    requestQueue[currRequest] = new message(messageType.request, tTime, address, data.Port);
                     currRequest++;
                     console.log("queue the request--");
                 } else {
                     console.log("Error: received reply when it's not possible");
                 }
 
-
-                break;
-
-
-
-        }
-    } else if (tMessage == messageType.response) {
-
-
+            }
+            break;
     }
-    
+
+
 }
 
 
