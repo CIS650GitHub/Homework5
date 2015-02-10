@@ -386,7 +386,9 @@ function PostObject(post_data, address) {
     post_req.end();
 }
 
-
+app.get('/', function(request, response){
+    response.sendfile('test.html');
+});
 
 // handle POST requests
 app.post('/do_post', function(req, res) {
@@ -413,4 +415,6 @@ screen.render();
 
 http.createServer(app).listen(app.get('port'), function() {
     console.log("Express server listening on port " + app.get('port'));
+
+
 });

@@ -10,13 +10,11 @@ var my_ip = "";
 
 var commandLineArgs = process.argv.slice(2);
 var port = "4000";
-if (commandLineArgs !== null)
-    port = parseInt(commandLineArgs[0]);
 var master_ip = "";
 var states = {
     GAP: 0,
     WAIT: 1,
-    REQUEST: 2
+    CRITICAL: 2
 };
 var currentState = 0;
 var requestQueue = [];
@@ -33,12 +31,14 @@ var messageType = {
 };
 var currState = states.GAP;
 
-function message(msgType, tStamp, ipAddr,port) {
+function message(msgType, tStamp, ipAddr, port) {
     this.port = port;
     this.messageType = msgType;
     this.timeStamp = tStamp;
     this.ipAddress = ipAddr;
 }
+
+
 var ifaces = os.networkInterfaces();
 Object.keys(ifaces).forEach(function(ifname) {
     var alias = 0;
@@ -56,6 +56,7 @@ Object.keys(ifaces).forEach(function(ifname) {
     });
 });
 
+
 app.use(bodyParser.urlencoded());
 
 // Create a screen object.
@@ -64,8 +65,8 @@ var screen = blessed.screen();
 var box = blessed.box({
         bottom: 0,
         right: 0,
-        width: '75%',
-        height: '75%',
+        width: '100%',
+        height: '100%',
         content: '',
         tags: true,
         border: {
@@ -87,8 +88,8 @@ var form = blessed.form({
         parent: box,
         top: 'center',
         left: 'center',
-        width: '50%',
-        height: '50%',
+        width: '90%',
+        height: '90%',
         border: {
             type: 'line'
         },
@@ -105,7 +106,7 @@ var buttonRequest = blessed.button({
         keys: true,
         shrink: true,
         top: 0,
-        left: 0,
+        right: 0,
         width: '50%',
         height: '50%',
         name: 'Request',
@@ -165,15 +166,14 @@ screen.render();
 buttonRequest.on('press', function() {
 
     //increment our time stamp
-    my_time++;
-    if (my_time > highest_time) {
-        highest_time = my_time;
-    }
+    my_time = highest_time + 1;
+   
+
     var success1 = d.send(master_ip, {
             Port: port,
             MessageType: messageType.request,
             TimeStamp: my_time,
-            IpAddress: my_ip
+            ipAddress: my_ip
         })
 
     if (!success1) {
@@ -182,11 +182,23 @@ buttonRequest.on('press', function() {
         currentState = states.WAIT;
     }
 
+     if(numNodes == 0)
+    {
+        currentState = states.CRITICAL;
+        replyQueue = [];
+        currReply = 0;
+        console.log("enter critical section");
+    } 
+
 });
 
 
 
 buttonRelease.on('press', function() {
+   // console.log("state" + currentState); 
+
+    if(currentState !== states.CRITICAL)
+        return;
 
     console.log("Release" + requestQueue.length);
 
@@ -194,23 +206,23 @@ buttonRelease.on('press', function() {
         var msg = requestQueue[i];
         var tMessage = parseInt(msg.MessageType);
         var tTime = parseInt(msg.TimeStamp);
-        var address = msg.port;
-        console.log("address" + address);
-        
+        var address = msg.ipAddress;
+        console.log("sending to address" + address);
+
         var post_data = querystring.stringify({
                 Port: port,
-                IPaddress: my_ip,
+                ipAddress: my_ip,
                 MessageType: messageType.response,
                 TimeStamp: my_time,
-                
+
             });
         PostObject(post_data, address);
     }
-    currentState =  states.GAP;
-     replyQueue = [];
-     requestQueue = [];
-    
-    
+    currentState = states.GAP;
+    replyQueue = [];
+    requestQueue = [];
+
+
 
 });
 
@@ -231,102 +243,112 @@ function receivePostdata(data) {
     console.log("receivePostdata");
     var tMessage = parseInt(data.MessageType);
     var tTime = parseInt(data.TimeStamp);
-    var address = data.port;
+    var address = data.ipAddress;
     console.log("receivePostdata" + address + "message type" + tMessage);
-    if (tMessage == messageType.response) {
-
-        if (replyQueue.length == (numNodes - 1)) {
-            currentState = states.REQUEST;
-            replyQueue = [];
-            currReply = 0;
-            console.log("enter critical section");
-        } else {
-            console.log("queuing.... queue size is before adding " + replyQueue.length);
-            replyQueue[currReply] = new message(messageType.response, tTime, data.IPaddress, data.Port);
-            currReply++;
-        }
+    if (replyQueue.length == (numNodes - 1)) {
+        currentState = states.CRITICAL;
+        replyQueue = [];
+        currReply = 0;
+        console.log("enter critical section");
+    } else {
+        console.log("queuing.... queue size is before adding " + replyQueue.length);
+        replyQueue[currReply] = new message(messageType.response, tTime, data.ipAddress, data.Port);
+        currReply++;
     }
+
 }
 
 
 function receiveMessage(data) {
-    console.log("Received " + JSON.stringify(data));
+    console.log("Received ");
     var tMessage = parseInt(data.MessageType);
     var tTime = parseInt(data.TimeStamp);
-    var address = data.Port;
-    if (tMessage == messageType.request) {
+    var address = data.ipAddress;
+    highest_time = tTime;
+    console.log("Highest time updated" + highest_time);
+    console.log("address:" + address);
 
-        switch (currentState) {
+    switch (currentState) {
 
-            case states.GAP:
-                console.log("in  Gap State");
-                if (tMessage == messageType.request) {
-                    if (highest_time < tTime) {
-                        highest_time = tTime;
-                        console.log("Highest time updated");
-                    }
+        case states.GAP:
+            {
+                console.log("in  Gap State Sending Reply to " + address);
+
+                var post_data = querystring.stringify({
+                        Port: port,
+                        ipAddress: my_ip,
+                        MessageType: messageType.response,
+                        TimeStamp: my_time
+                    });
+                PostObject(post_data, address);
+            }
+            break;
+
+
+        case states.WAIT:
+            {
+                console.log("in  Wait State");
+
+                if (tTime < my_time) {
                     //send reply 
+                    console.log("tTime < my_time");
                     var post_data = querystring.stringify({
                             Port: port,
-                            IPaddress:my_ip,
+                            ipAddress: my_ip,
                             MessageType: messageType.response,
                             TimeStamp: my_time
                         });
                     PostObject(post_data, address);
-                }
-                break;
-
-
-            case states.WAIT:
-                console.log("in  Wait State");
-                if (tMessage == messageType.request) {
-                    if (tTime < my_time) {
-                        //send reply 
-                        console.log("tTime < my_time");
-                        var post_data = querystring.stringify({
-                                Port: port,
-                                IPaddress:my_ip,
-                                MessageType: messageType.response,
-                                TimeStamp: my_time
-                            });
+                } else if (tTime > my_time) {
+                    console.log("tTime > my_time so defer reply!!");
+                    requestQueue[currRequest] = new message(messageType.request, tTime, data.ipAddress, data.Port);
+                    currRequest++;
+                } else if (tTime == my_time) {
+                    console.log("tTime == my_time");
+                    var res = address.split(".");
+                    var r_ip=  parseInt(res[3]);
+                    var res = my_ip.split(".");
+                    var my_ip=  parseInt(res[3]);
+                    if(my_ip > r_ip)
+                     {
+                       var post_data = querystring.stringify({
+                            Port: port,
+                            ipAddress: my_ip,
+                            MessageType: messageType.response,
+                            TimeStamp: my_time
+                        });
                         PostObject(post_data, address);
-                    } else if (tTime > my_time) {
-                        console.log("tTime > my_time");
-                        requestQueue[currRequest] = new message(messageType.request, tTime, data.IPaddress, data.Port);
+                     }  
+                     else
+                     {
+                        console.log("defer reply");
+                        requestQueue[currRequest] = new message(messageType.request, tTime, data.ipAddress, data.Port);
                         currRequest++;
-                    } else if (tTime == my_time) {
-                        console.log("tTime == my_time");
-                        requestQueue[currRequest] = new message(messageType.request, tTime, data.IPaddress, data.Port);
-                        currRequest++;
-                    }
+                     } 
                 }
-                break;
+            }
+            break;
 
-            case states.REQUEST:
-                console.log("in REQUEST state");
+        case states.CRITICAL:
+            {
+                console.log("in CRITICAL state");
 
                 if (tMessage == messageType.request) {
                     if (highest_time < tTime) {
                         highest_time = tTime;
                     }
-                    requestQueue[currRequest] = new message(messageType.request, tTime, address,data.Port);
+                    requestQueue[currRequest] = new message(messageType.request, tTime, address, data.Port);
                     currRequest++;
                     console.log("queue the request--");
                 } else {
                     console.log("Error: received reply when it's not possible");
                 }
 
-
-                break;
-
-
-
-        }
-    } else if (tMessage == messageType.response) {
-
-
+            }
+            break;
     }
-    
+
+
 }
 
 
@@ -351,7 +373,10 @@ function registerCallbacks() {
         console.log("Number of node" + numNodes);
     });
 
-    d.on("removed", function(obj) {});
+    d.on("removed", function(obj) {
+        console.log("Number of node" + numNodes);
+        numNodes -- ;
+    });
 
     d.on("master", function(obj) {
 
@@ -370,10 +395,10 @@ function registerCallbacks() {
 function PostObject(post_data, address) {
     // An object of options to indicate where to post to
 
-    console.log('Sending PostObject' + post_data);
+    console.log('Sending PostObject');
     var post_options = {
-        host: '127.0.0.1',
-        port: address,
+        host: address,
+        port: port,
         path: '/do_post',
         method: 'POST',
         headers: {
@@ -399,11 +424,13 @@ function PostObject(post_data, address) {
     post_req.end();
 }
 
-
+app.get('/', function(request, response){
+    response.sendfile('test.html');
+});
 
 // handle POST requests
 app.post('/do_post', function(req, res) {
-    console.log("app.post received" + JSON.stringify(req.body));
+    console.log("app.post received" );
 
     receivePostdata(req.body);
     res.json({
@@ -426,4 +453,6 @@ screen.render();
 
 http.createServer(app).listen(app.get('port'), function() {
     console.log("Express server listening on port " + app.get('port'));
+
+
 });
